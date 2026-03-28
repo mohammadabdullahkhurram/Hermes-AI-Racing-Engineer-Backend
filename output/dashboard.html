@@ -588,22 +588,23 @@ function drawTrackMap(){
 
   const xs = trackX, ys = trackY;
 
-  // Compute bounds from all sources: racing line + both boundaries
+  // Collect all points (track + boundaries) to compute unified bounds
   const allX = [...xs, ...leftBnd.map(p=>p[0]), ...rightBnd.map(p=>p[0])];
   const allY = [...ys, ...leftBnd.map(p=>p[1]), ...rightBnd.map(p=>p[1])];
   const minX = Math.min(...allX), maxX = Math.max(...allX);
   const minY = Math.min(...allY), maxY = Math.max(...allY);
   const rangeX = maxX - minX, rangeY = maxY - minY;
 
+  // Non-uniform scale fills the canvas — matches game UI proportions
+  // No Y-flip: low Y at top (main straight), high Y at bottom (triangle tip)
   const pad = 48;
-  const scaleX = (W - pad*2) / rangeX;
-  const scaleY = (H - pad*2) / rangeY;
-  const scale  = Math.min(scaleX, scaleY);
-  const offX   = (W - rangeX * scale) / 2 - minX * scale;
-  const offY   = (H - rangeY * scale) / 2 - minY * scale;
+  const scaleX = (W - pad * 2) / rangeX;
+  const scaleY = (H - pad * 2) / rangeY;
+  const offX = pad - minX * scaleX;
+  const offY = pad - minY * scaleY;
 
-  function toCanvas(x, y){
-    return [x * scale + offX, H - (y * scale + offY)];
+  function toCanvas(x, y) {
+    return [x * scaleX + offX, y * scaleY + offY];
   }
 
   // Draw track fill between boundaries
