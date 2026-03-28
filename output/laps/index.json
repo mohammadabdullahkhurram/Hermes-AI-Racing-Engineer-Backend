@@ -1,0 +1,26 @@
+[
+  {
+    "lap_id": 1,
+    "label": "ac_lap1",
+    "lap_time_s": 215.861,
+    "gap_s": 141.602,
+    "samples": 3675,
+    "timestamp": "2026-03-28T21:53:30.360425"
+  },
+  {
+    "lap_id": 2,
+    "label": "ac_lap1",
+    "lap_time_s": 119.565,
+    "gap_s": 45.306,
+    "samples": 3469,
+    "timestamp": "2026-03-28T21:59:58.939279"
+  },
+  {
+    "lap_id": 3,
+    "label": "ac_lap2",
+    "lap_time_s": 64.602,
+    "gap_s": -9.657,
+    "samples": 3137,
+    "timestamp": "2026-03-28T22:01:03.355501"
+  }
+]

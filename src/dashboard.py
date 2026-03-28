@@ -518,6 +518,27 @@ body::before{{content:'';position:fixed;inset:0;background-image:repeating-linea
 .wheel-label{{font-size:9px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px}}
 .wheel-val{{font-family:var(--fd);font-size:22px;font-weight:700}}
 
+/* download btn */
+.dl-btn{{display:inline-block;padding:6px 16px;background:transparent;border:1px solid var(--border2);color:var(--muted);font-family:var(--fm);font-size:10px;letter-spacing:2px;text-transform:uppercase;text-decoration:none;transition:all .2s;cursor:pointer}}
+.dl-btn:hover{{border-color:var(--teal);color:var(--teal)}}
+
+/* lap selector */
+.lap-selector{{background:var(--bg2);border-bottom:1px solid var(--border);padding:10px 24px;display:flex;align-items:center;gap:8px;overflow-x:auto;margin:0 -24px 28px;position:sticky;top:0;z-index:100}}
+.lap-selector::-webkit-scrollbar{{height:3px}}.lap-selector::-webkit-scrollbar-track{{background:var(--bg2)}}.lap-selector::-webkit-scrollbar-thumb{{background:var(--border2)}}
+.lap-sel-label{{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);white-space:nowrap;margin-right:4px}}
+.lap-chip{{display:flex;flex-direction:column;align-items:center;padding:6px 14px;background:var(--bg3);border:1px solid var(--border);cursor:pointer;text-decoration:none;transition:all .15s;white-space:nowrap;min-width:90px}}
+.lap-chip:hover{{border-color:#444}}
+.lap-chip.active{{border-color:var(--red);background:rgba(232,0,45,.08)}}
+.lap-chip.best-chip{{border-color:var(--teal)}}
+.lap-chip.active.best-chip{{border-color:var(--teal);background:rgba(0,210,190,.08)}}
+.lap-chip-num{{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:3px}}
+.lap-chip-time{{font-family:var(--fd);font-size:16px;font-weight:700;color:#fff}}
+.lap-chip.active .lap-chip-time{{color:var(--red)}}
+.lap-chip.best-chip .lap-chip-time{{color:var(--teal)}}
+.lap-chip-gap{{font-size:9px;color:var(--muted)}}
+.back-btn{{margin-left:auto;padding:5px 12px;background:transparent;border:1px solid var(--border);color:var(--muted);font-family:var(--fm);font-size:10px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;text-decoration:none;white-space:nowrap;flex-shrink:0}}
+.back-btn:hover{{border-color:#444;color:#fff}}
+
 /* animations */
 @keyframes fadeUp{{from{{opacity:0;transform:translateY(16px)}}to{{opacity:1;transform:translateY(0)}}}}
 @keyframes slideIn{{from{{opacity:0;transform:translateX(-12px)}}to{{opacity:1;transform:translateX(0)}}}}
@@ -535,6 +556,13 @@ body::before{{content:'';position:fixed;inset:0;background-image:repeating-linea
 <body>
 <div class="wrap">
 
+<!-- Lap selector — loaded dynamically -->
+<div class="lap-selector" id="lapSelector" style="display:none">
+  <span class="lap-sel-label">Laps</span>
+  <div id="lapChips" style="display:flex;gap:8px;align-items:center"></div>
+  <a class="back-btn" href="/">← All Laps</a>
+</div>
+
 <div class="topbar">
   <div class="brand">
     <div class="brand-flag"></div>
@@ -543,24 +571,27 @@ body::before{{content:'';position:fixed;inset:0;background-image:repeating-linea
       <div class="brand-sub">Yas Marina Circuit · Autonomous Track</div>
     </div>
   </div>
-  <div class="session">Constructor GenAI Hackathon 2026<span>Lap Comparison Report</span></div>
+  <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+    <div class="session">Constructor GenAI Hackathon 2026<span>Lap Comparison Report</span></div>
+    <a class="dl-btn" href="/download/csv" download="ac_lap.csv">↓ Download CSV</a>
+  </div>
 </div>
 
 <div class="hero">
   <div class="hero-lap ref">
-    <div class="hero-label">Reference Lap</div>
+    <div class="hero-label">A2RL Autonomous Car</div>
     <div class="hero-time">{fmt_time(ref_time)}</div>
-    <div class="hero-tag">Fast Laps · Fastest</div>
+    <div class="hero-tag">Reference · Yas Marina Fastest</div>
   </div>
   <div class="hero-mid">
     <div class="mid-label">Gap</div>
     <div class="mid-val">{delta_sign}{fmt_time(abs(delta))}</div>
-    <div class="mid-sub">{'Slower' if delta > 0 else 'Faster'} than reference</div>
+    <div class="mid-sub">{'Slower' if delta > 0 else 'Faster'} than A2RL</div>
   </div>
   <div class="hero-lap comp">
-    <div class="hero-label">Driver Lap</div>
+    <div class="hero-label">Your Lap</div>
     <div class="hero-time">{fmt_time(comp_time)}</div>
-    <div class="hero-tag">Good Lap · Conservative</div>
+    <div class="hero-tag">{analysis.get('comp_label','Driver').replace('_',' ').title()}</div>
   </div>
 </div>
 
@@ -575,8 +606,8 @@ body::before{{content:'';position:fixed;inset:0;background-image:repeating-linea
     <div class="chart-wrap">
       <div class="sec">Telemetry Trace</div>
       <div class="chart-legend">
-        <div class="leg-item"><div class="leg-line" style="background:var(--red)"></div>Reference</div>
-        <div class="leg-item"><div class="leg-line" style="background:#555"></div>Driver</div>
+        <div class="leg-item"><div class="leg-line" style="background:var(--red)"></div>A2RL Autonomous</div>
+        <div class="leg-item"><div class="leg-line" style="background:#555"></div>Your Lap</div>
       </div>
       <div class="chart-tabs">
         <button class="ctab active" onclick="switchChart('speed',this)">Speed</button>
@@ -822,6 +853,49 @@ function drawTrackMap(){{
 
 window.addEventListener('resize', drawTrackMap);
 
+// ── Lap selector ──────────────────────────────────────────────────────────────
+(async function loadLapSelector() {{
+  try {{
+    const res  = await fetch('/laps_json');
+    const laps = await res.json();
+    if (!laps || laps.length === 0) return;
+
+    // Find current lap from URL
+    const urlLapId = parseInt(window.location.pathname.split('/').pop()) || null;
+
+    // Find best lap
+    const best = laps.reduce((b, l) =>
+      l.lap_time_s < (b ? b.lap_time_s : Infinity) ? l : b, null);
+
+    const chips = laps.map(l => {{
+      const isCurrent = l.lap_id === urlLapId;
+      const isBest    = best && l.lap_id === best.lap_id && laps.length > 1;
+      const gap       = l.gap_s > 0 ? '+'+l.gap_s.toFixed(2)+'s' : l.gap_s.toFixed(2)+'s';
+      const cls       = 'lap-chip' +
+                        (isCurrent ? ' active' : '') +
+                        (isBest    ? ' best-chip' : '');
+      return `<a class="${{cls}}" href="/dashboard/${{l.lap_id}}">
+        <div class="lap-chip-num">LAP ${{l.lap_id}}${{isBest ? ' ★' : ''}}</div>
+        <div class="lap-chip-time">${{fmtT(l.lap_time_s)}}</div>
+        <div class="lap-chip-gap">${{gap}}</div>
+      </a>`;
+    }}).join('');
+
+    document.getElementById('lapChips').innerHTML = chips;
+    document.getElementById('lapSelector').style.display = 'flex';
+
+    // Scroll active chip into view
+    const active = document.querySelector('.lap-chip.active');
+    if (active) active.scrollIntoView({{inline:'center', block:'nearest'}});
+
+  }} catch(e) {{}}
+}})();
+
+function fmtT(s) {{
+  const m = Math.floor(s/60), sec = (s%60).toFixed(3).padStart(6,'0');
+  return m > 0 ? m+':'+sec : s.toFixed(3)+'s';
+}}
+
 // ── EXTRA CHANNEL CHARTS ──────────────────────────────────────────────────────
 let hasBrakeTemp = false;
 let hasTyreTemp  = false;
@@ -878,6 +952,49 @@ function buildTyreChart(){{
 }}
 
 window.addEventListener('resize', drawTrackMap);
+
+// ── Lap selector ──────────────────────────────────────────────────────────────
+(async function loadLapSelector() {{
+  try {{
+    const res  = await fetch('/laps_json');
+    const laps = await res.json();
+    if (!laps || laps.length === 0) return;
+
+    // Find current lap from URL
+    const urlLapId = parseInt(window.location.pathname.split('/').pop()) || null;
+
+    // Find best lap
+    const best = laps.reduce((b, l) =>
+      l.lap_time_s < (b ? b.lap_time_s : Infinity) ? l : b, null);
+
+    const chips = laps.map(l => {{
+      const isCurrent = l.lap_id === urlLapId;
+      const isBest    = best && l.lap_id === best.lap_id && laps.length > 1;
+      const gap       = l.gap_s > 0 ? '+'+l.gap_s.toFixed(2)+'s' : l.gap_s.toFixed(2)+'s';
+      const cls       = 'lap-chip' +
+                        (isCurrent ? ' active' : '') +
+                        (isBest    ? ' best-chip' : '');
+      return `<a class="${{cls}}" href="/dashboard/${{l.lap_id}}">
+        <div class="lap-chip-num">LAP ${{l.lap_id}}${{isBest ? ' ★' : ''}}</div>
+        <div class="lap-chip-time">${{fmtT(l.lap_time_s)}}</div>
+        <div class="lap-chip-gap">${{gap}}</div>
+      </a>`;
+    }}).join('');
+
+    document.getElementById('lapChips').innerHTML = chips;
+    document.getElementById('lapSelector').style.display = 'flex';
+
+    // Scroll active chip into view
+    const active = document.querySelector('.lap-chip.active');
+    if (active) active.scrollIntoView({{inline:'center', block:'nearest'}});
+
+  }} catch(e) {{}}
+}})();
+
+function fmtT(s) {{
+  const m = Math.floor(s/60), sec = (s%60).toFixed(3).padStart(6,'0');
+  return m > 0 ? m+':'+sec : s.toFixed(3)+'s';
+}}
 </script>
 </body>
 </html>"""
