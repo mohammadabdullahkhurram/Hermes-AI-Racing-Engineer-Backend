@@ -1,106 +1,15 @@
 """
-run.py  —  AI Race Engineer
-Press ▶ in VS Code to run everything.
-Extracts telemetry → analyzes → generates coaching → opens dashboard.
+dashboard.py
+Shared dashboard builder used by both test.py and server.py.
+Contains all functions needed to generate the F1-style HTML dashboard.
 """
 
 import json
-import os
-import sys
-import webbrowser
 from pathlib import Path
+import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+BND_PATH = Path(__file__).parent.parent / "data/yas_marina_bnd.json"
 
-from extractor     import extract_lap, save_lap_json
-from analyzer      import run_analysis
-from coach         import generate_coaching_report, print_coaching_report
-from race_analyzer import run_race_analysis
-
-# ── CONFIG — change these if your filenames differ ───────────────────────────
-BASE_DIR   = Path(__file__).parent
-REF_MCAP   = str(BASE_DIR.parent / "data/hackathon_fast_laps.mcap")
-COMP_MCAP  = str(BASE_DIR.parent / "data/hackathon_good_lap.mcap")
-OUTPUT_DIR = str(BASE_DIR / "output")
-RACE_MCAP  = str(BASE_DIR.parent / "data/hackathon_wheel_to_wheel.mcap")
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def banner(text):
-    print("\n" + "=" * 60)
-    print(f"  {text}")
-    print("=" * 60)
-
-
-def run_pipeline(comp_json_override=None):
-    Path(OUTPUT_DIR).mkdir(exist_ok=True)
-
-    ref_json  = f"{OUTPUT_DIR}/fast_laps.json"
-
-    # ── STEP 1: Extract ───────────────────────────────────────────────────────
-    if comp_json_override:
-        # Sim lap mode — only extract reference, use provided sim lap
-        banner("STEP 1 / 3  —  Extracting reference lap")
-        ref_data = extract_lap(REF_MCAP, lap_label="fast_laps")
-        save_lap_json(ref_data, ref_json)
-        comp_json = comp_json_override
-        print(f"  Using sim lap: {comp_json}")
-    else:
-        # Normal mode — extract both MCAP files
-        banner("STEP 1 / 3  —  Extracting telemetry")
-        comp_json = f"{OUTPUT_DIR}/good_lap.json"
-        ref_data = extract_lap(REF_MCAP, lap_label="fast_laps")
-        save_lap_json(ref_data, ref_json)
-        comp_data = extract_lap(COMP_MCAP, lap_label="good_lap")
-        save_lap_json(comp_data, comp_json)
-
-    # ── STEP 2: Analyze ───────────────────────────────────────────────────────
-    banner("STEP 2 / 3  —  Comparing laps")
-
-    analysis = run_analysis(ref_json, comp_json)
-    analysis_path = f"{OUTPUT_DIR}/analysis.json"
-    with open(analysis_path, "w") as f:
-        json.dump(analysis, f, indent=2)
-
-    print(f"  Total delta  : {analysis['total_time_delta_s']:+.3f}s")
-    for s in analysis["sectors"]:
-        print(f"  {s['sector_name']}: {s['time_delta_s']:+.3f}s  |  "
-              f"min speed delta {s['speed_delta_at_min_kmh']:+.1f} km/h")
-
-    # ── STEP 3: Coach ─────────────────────────────────────────────────────────
-    banner("STEP 3 / 3  —  Generating coaching report")
-
-    coaching = generate_coaching_report(analysis)
-    coaching_path = f"{OUTPUT_DIR}/coaching.json"
-    with open(coaching_path, "w") as f:
-        json.dump(coaching, f, indent=2)
-
-    print_coaching_report(coaching)
-
-    # ── STEP 4: Race Analysis ────────────────────────────────────────────────────
-    banner("STEP 4 / 4  —  Wheel-to-wheel race analysis")
-    race_result = None
-    try:
-        race_result = run_race_analysis(RACE_MCAP, ref_json, OUTPUT_DIR)
-        s = race_result["summary"]
-        print(f"  Laps: {s['total_laps']}  |  Best: {s['best_lap_time_s']:.1f}s  |  Events: {s['total_events']}")
-    except Exception as e:
-        print(f"  Race analysis skipped: {e}")
-
-    # ── STEP 5: Dashboard ─────────────────────────────────────────────────────
-    banner("Building dashboard")
-
-    html = build_dashboard(analysis, coaching, ref_json, comp_json, race_result)
-    dashboard_path = f"{OUTPUT_DIR}/dashboard.html"
-    with open(dashboard_path, "w") as f:
-        f.write(html)
-    print(f"  Saved → {dashboard_path}")
-
-    webbrowser.open(f"file://{os.path.abspath(dashboard_path)}")
-    print("  Dashboard opened in browser ✓")
-
-
-# ── DASHBOARD BUILDER ─────────────────────────────────────────────────────────
 
 def load_trace(json_path):
     try:
@@ -129,7 +38,7 @@ def build_track_map_data(fast_trace, good_trace, analysis):
 
     # Load track boundaries
     left_bnd, right_bnd = [], []
-    bnd_path = Path(__file__).parent.parent / "data/yas_marina_bnd.json"
+    bnd_path = BND_PATH
     try:
         import json as _json
         bnd = _json.load(open(bnd_path))["boundaries"]
@@ -793,13 +702,3 @@ window.addEventListener('resize', drawTrackMap);
 </body>
 </html>"""
 
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="AI Race Engineer Pipeline")
-    parser.add_argument(
-        "--comp-json", default=None,
-        help="Path to normalized sim lap JSON (skips MCAP extraction for comp lap)"
-    )
-    args = parser.parse_args()
-    run_pipeline(comp_json_override=args.comp_json)
