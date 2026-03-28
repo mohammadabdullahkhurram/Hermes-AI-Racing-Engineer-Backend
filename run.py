@@ -18,11 +18,10 @@ from coach         import generate_coaching_report, print_coaching_report
 from race_analyzer import run_race_analysis
 
 # ── CONFIG — change these if your filenames differ ───────────────────────────
-BASE_DIR   = Path(__file__).parent
-REF_MCAP   = str(BASE_DIR.parent / "data/hackathon_fast_laps.mcap")
-COMP_MCAP  = str(BASE_DIR.parent / "data/hackathon_good_lap.mcap")
-OUTPUT_DIR = str(BASE_DIR / "output")
-RACE_MCAP  = str(BASE_DIR.parent / "data/hackathon_wheel_to_wheel.mcap")
+REF_MCAP   = "data/hackathon_fast_laps.mcap"
+COMP_MCAP  = "data/hackathon_good_lap.mcap"
+OUTPUT_DIR = "output"
+RACE_MCAP  = "data/hackathon_wheel_to_wheel.mcap"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -344,7 +343,12 @@ def build_dashboard(analysis, coaching, ref_json, comp_json, race_result=None):
         {table_html}
         <div class="sec">Race Events</div>
         {event_html}"""
-    positives_section = ('<div class="sec">Whats Working</div><div class="positives">' + positive_items() + '</div>') if positives else ''  
+
+    whats_working_label = "What's Working"
+    positives_section = (
+        '<div class="sec">' + whats_working_label + '</div>'
+        + '<div class="positives">' + positive_items() + '</div>'
+    ) if positives else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
