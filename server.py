@@ -255,10 +255,10 @@ body::before{content:'';position:fixed;inset:0;background-image:repeating-linear
 
   <div class="card">
     <div class="zone" id="zone">
-      <input type="file" id="fileInput" accept=".csv">
+      <input type="file" id="fileInput" accept=".csv,.mcap">
       <div class="zone-icon">⬆</div>
-      <div class="zone-title">Drop SimHub CSV Here</div>
-      <div class="zone-sub">or click to browse · .csv files only</div>
+      <div class="zone-title">Drop Your Lap File Here</div>
+      <div class="zone-sub">or click to browse · .csv (SimHub) or .mcap</div>
     </div>
     <div class="file-name" id="fileName"></div>
     <button class="btn" id="analyzeBtn" onclick="upload()">Analyse Lap →</button>
@@ -294,7 +294,7 @@ zone.addEventListener('drop', e => {
   e.preventDefault();
   zone.classList.remove('drag');
   const f = e.dataTransfer.files[0];
-  if (f && f.name.endsWith('.csv')) selectFile(f);
+  if (f && (f.name.endsWith('.csv') || f.name.endsWith('.mcap'))) selectFile(f);
 });
 fileInput.addEventListener('change', () => {
   if (fileInput.files[0]) selectFile(fileInput.files[0]);
@@ -390,30 +390,43 @@ def upload():
         return jsonify({"ok": False, "error": "No file received"})
 
     f = request.files["file"]
-    if not f.filename.endswith(".csv"):
-        return jsonify({"ok": False, "error": "Only .csv files accepted"})
+    filename = f.filename.lower()
+
+    if not (filename.endswith(".csv") or filename.endswith(".mcap")):
+        return jsonify({"ok": False, "error": "Only .csv or .mcap files accepted"})
 
     try:
-        csv_text = f.read().decode("utf-8-sig")
-        label    = Path(f.filename).stem
-
-        # Normalize CSV → lap JSON
-        lap_data = csv_to_lap_json(csv_text, label=label)
-        lap      = lap_data["laps"][0]
-
         OUTPUT_DIR.mkdir(exist_ok=True)
         sim_json_path = str(OUTPUT_DIR / "sim_lap.json")
-        with open(sim_json_path, "w") as jf:
-            json.dump(lap_data, jf, indent=2)
+        label = Path(f.filename).stem
+
+        if filename.endswith(".mcap"):
+            # Save MCAP temporarily then extract
+            tmp_mcap = str(OUTPUT_DIR / f"uploaded_{label}.mcap")
+            f.save(tmp_mcap)
+            from extractor import extract_lap, save_lap_json
+            lap_data = extract_lap(tmp_mcap, lap_label=label)
+            save_lap_json(lap_data, sim_json_path)
+            lap = lap_data["laps"][0]
+            import os; os.remove(tmp_mcap)
+
+        else:
+            # CSV path
+            csv_text = f.read().decode("utf-8-sig")
+            lap_data = csv_to_lap_json(csv_text, label=label)
+            lap = lap_data["laps"][0]
+            with open(sim_json_path, "w") as jf:
+                json.dump(lap_data, jf, indent=2)
 
         # Run pipeline
         run_full_pipeline(sim_json_path)
 
         return jsonify({
-            "ok":      True,
-            "samples": lap["n_samples"],
+            "ok":       True,
+            "samples":  lap["n_samples"],
             "lap_time": lap["lap_time_s"],
-            "dist_m":  lap["lap_dist_m"],
+            "dist_m":   lap["lap_dist_m"],
+            "file_type": "mcap" if filename.endswith(".mcap") else "csv",
         })
 
     except Exception as e:
@@ -446,7 +459,7 @@ if __name__ == "__main__":
     print("\n" + "="*50)
     print("  AI Race Engineer — Upload Server")
     print("="*50)
-    print("  Opening http://localhost:5000")
+    print("  Opening http://localhost:8080")
     print("  Upload your SimHub CSV to get coached")
     print("  Press Ctrl+C to stop")
     print("="*50 + "\n")

@@ -324,6 +324,180 @@ def _records_to_lap_dict(records: list, lap_number: int) -> dict:
     }
 
 
+
+# ── Extra channel topics ──────────────────────────────────────────────────────
+BRAKE_TEMP_TOPIC  = "/constructor0/can/badenia_560_brake_disk_temp"
+TPMS_FRONT_TOPIC  = "/constructor0/can/badenia_560_tpms_front"
+TPMS_REAR_TOPIC   = "/constructor0/can/badenia_560_tpms_rear"
+SURF_TEMP_F_TOPIC = "/constructor0/can/badenia_560_tyre_surface_temp_front"
+SURF_TEMP_R_TOPIC = "/constructor0/can/badenia_560_tyre_surface_temp_rear"
+
+
+def _try_fields(msg, *field_groups):
+    """Try multiple field name variants, return first non-zero value found."""
+    for fields in field_groups:
+        if isinstance(fields, str):
+            fields = [fields]
+        for f in fields:
+            try:
+                v = float(getattr(msg, f, 0.0) or 0.0)
+                if v != 0.0:
+                    return v
+            except Exception:
+                pass
+    return 0.0
+
+
+def extract_extra_channels(mcap_path: str) -> dict:
+    """
+    Extract brake disc temperatures, tyre temperatures and pressures
+    from CAN bus topics. Returns a dict of channel arrays keyed by name.
+    Gracefully returns empty dict if topics or fields are not found.
+    """
+    from mcap_ros2.reader import read_ros2_messages
+
+    extra_topics = [
+        BRAKE_TEMP_TOPIC, TPMS_FRONT_TOPIC, TPMS_REAR_TOPIC,
+        SURF_TEMP_F_TOPIC, SURF_TEMP_R_TOPIC,
+    ]
+
+    brake_temps  = []   # [ts, fl, fr, rl, rr]
+    tyre_press   = []   # [ts, fl_press, fr_press, rl_press, rr_press]
+    tyre_temps   = []   # [ts, fl_temp, fr_temp, rl_temp, rr_temp]
+    surf_temps_f = []   # [ts, fl_inner, fl_mid, fl_outer, fr_inner, fr_mid, fr_outer]
+    surf_temps_r = []   # [ts, rl_..., rr_...]
+
+    print(f"  Extracting extra channels...")
+    try:
+        for item in read_ros2_messages(mcap_path, topics=extra_topics):
+            ts  = item.log_time_ns * 1e-9
+            msg = item.ros_msg
+            top = item.channel.topic
+
+            if top == BRAKE_TEMP_TOPIC:
+                brake_temps.append([
+                    ts,
+                    _try_fields(msg, "temp_fl", "temperature_fl", "fl_temp", "brake_temp_fl"),
+                    _try_fields(msg, "temp_fr", "temperature_fr", "fr_temp", "brake_temp_fr"),
+                    _try_fields(msg, "temp_rl", "temperature_rl", "rl_temp", "brake_temp_rl"),
+                    _try_fields(msg, "temp_rr", "temperature_rr", "rr_temp", "brake_temp_rr"),
+                ])
+
+            elif top == TPMS_FRONT_TOPIC:
+                tyre_press.append([
+                    ts,
+                    _try_fields(msg, "pressure_fl", "tyre_pressure_fl", "fl_pressure", "press_fl"),
+                    _try_fields(msg, "pressure_fr", "tyre_pressure_fr", "fr_pressure", "press_fr"),
+                    0.0, 0.0,
+                ])
+                tyre_temps.append([
+                    ts,
+                    _try_fields(msg, "temp_fl", "temperature_fl", "tyre_temp_fl", "fl_temp"),
+                    _try_fields(msg, "temp_fr", "temperature_fr", "tyre_temp_fr", "fr_temp"),
+                    0.0, 0.0,
+                ])
+
+            elif top == TPMS_REAR_TOPIC:
+                tyre_press.append([
+                    ts,
+                    0.0, 0.0,
+                    _try_fields(msg, "pressure_rl", "tyre_pressure_rl", "rl_pressure", "press_rl"),
+                    _try_fields(msg, "pressure_rr", "tyre_pressure_rr", "rr_pressure", "press_rr"),
+                ])
+                tyre_temps.append([
+                    ts,
+                    0.0, 0.0,
+                    _try_fields(msg, "temp_rl", "temperature_rl", "tyre_temp_rl", "rl_temp"),
+                    _try_fields(msg, "temp_rr", "temperature_rr", "tyre_temp_rr", "rr_temp"),
+                ])
+
+            elif top == SURF_TEMP_F_TOPIC:
+                surf_temps_f.append([
+                    ts,
+                    _try_fields(msg, "fl_inner", "tyre_temp_fl_inner", "inner_fl"),
+                    _try_fields(msg, "fl_mid",   "tyre_temp_fl_mid",   "mid_fl"),
+                    _try_fields(msg, "fl_outer", "tyre_temp_fl_outer", "outer_fl"),
+                    _try_fields(msg, "fr_inner", "tyre_temp_fr_inner", "inner_fr"),
+                    _try_fields(msg, "fr_mid",   "tyre_temp_fr_mid",   "mid_fr"),
+                    _try_fields(msg, "fr_outer", "tyre_temp_fr_outer", "outer_fr"),
+                ])
+
+            elif top == SURF_TEMP_R_TOPIC:
+                surf_temps_r.append([
+                    ts,
+                    _try_fields(msg, "rl_inner", "tyre_temp_rl_inner", "inner_rl"),
+                    _try_fields(msg, "rl_mid",   "tyre_temp_rl_mid",   "mid_rl"),
+                    _try_fields(msg, "rl_outer", "tyre_temp_rl_outer", "outer_rl"),
+                    _try_fields(msg, "rr_inner", "tyre_temp_rr_inner", "inner_rr"),
+                    _try_fields(msg, "rr_mid",   "tyre_temp_rr_mid",   "mid_rr"),
+                    _try_fields(msg, "rr_outer", "tyre_temp_rr_outer", "outer_rr"),
+                ])
+
+    except Exception as e:
+        print(f"  Extra channels skipped: {e}")
+        return {}
+
+    result = {}
+
+    if brake_temps:
+        # Normalize timestamps
+        t0 = brake_temps[0][0]
+        result["brake_temp"] = {
+            "time_s": [round(r[0]-t0, 3) for r in brake_temps],
+            "fl":     [round(r[1], 1) for r in brake_temps],
+            "fr":     [round(r[2], 1) for r in brake_temps],
+            "rl":     [round(r[3], 1) for r in brake_temps],
+            "rr":     [round(r[4], 1) for r in brake_temps],
+        }
+        print(f"  Brake temps: {len(brake_temps)} samples")
+
+    if tyre_temps:
+        t0 = tyre_temps[0][0]
+        result["tyre_temp"] = {
+            "time_s": [round(r[0]-t0, 3) for r in tyre_temps],
+            "fl":     [round(r[1], 1) for r in tyre_temps],
+            "fr":     [round(r[2], 1) for r in tyre_temps],
+            "rl":     [round(r[3], 1) for r in tyre_temps],
+            "rr":     [round(r[4], 1) for r in tyre_temps],
+        }
+        print(f"  Tyre temps: {len(tyre_temps)} samples")
+
+    if tyre_press:
+        t0 = tyre_press[0][0]
+        result["tyre_pressure"] = {
+            "time_s": [round(r[0]-t0, 3) for r in tyre_press],
+            "fl":     [round(r[1], 2) for r in tyre_press],
+            "fr":     [round(r[2], 2) for r in tyre_press],
+            "rl":     [round(r[3], 2) for r in tyre_press],
+            "rr":     [round(r[4], 2) for r in tyre_press],
+        }
+
+    if surf_temps_f or surf_temps_r:
+        all_surf = surf_temps_f + surf_temps_r
+        if all_surf:
+            t0 = min(r[0] for r in all_surf)
+            result["tyre_surface_temp"] = {
+                "time_s":    [round(r[0]-t0, 3) for r in surf_temps_f],
+                "fl_inner":  [round(r[1], 1) for r in surf_temps_f],
+                "fl_mid":    [round(r[2], 1) for r in surf_temps_f],
+                "fl_outer":  [round(r[3], 1) for r in surf_temps_f],
+                "fr_inner":  [round(r[4], 1) for r in surf_temps_f],
+                "fr_mid":    [round(r[5], 1) for r in surf_temps_f],
+                "fr_outer":  [round(r[6], 1) for r in surf_temps_f],
+                "rl_inner":  [round(r[1], 1) for r in surf_temps_r],
+                "rl_mid":    [round(r[2], 1) for r in surf_temps_r],
+                "rl_outer":  [round(r[3], 1) for r in surf_temps_r],
+                "rr_inner":  [round(r[4], 1) for r in surf_temps_r],
+                "rr_mid":    [round(r[5], 1) for r in surf_temps_r],
+                "rr_outer":  [round(r[6], 1) for r in surf_temps_r],
+            }
+            print(f"  Surface temps: {len(surf_temps_f)} front, {len(surf_temps_r)} rear samples")
+
+    if not result:
+        print("  No extra channel data found (fields may differ from expected names)")
+
+    return result
+
 def save_lap_json(lap_data: dict, output_path: str):
     """Save extracted lap data to JSON."""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)

@@ -16,7 +16,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from extractor     import extract_lap, save_lap_json
+from extractor     import extract_lap, save_lap_json, extract_extra_channels
 from analyzer      import run_analysis
 from coach         import generate_coaching_report, print_coaching_report
 from race_analyzer import run_race_analysis
@@ -49,6 +49,13 @@ def run():
     comp_data = extract_lap(COMP_MCAP, lap_label="good_lap")
     save_lap_json(comp_data, comp_json)
 
+    # ── Extra channels from reference MCAP ──────────────────────────────────────
+    extra_channels = {}
+    try:
+        extra_channels = extract_extra_channels(REF_MCAP)
+    except Exception as e:
+        print(f"  Extra channels skipped: {e}")
+
     # ── Step 2: Analyze ───────────────────────────────────────────────────────
     banner("STEP 2 / 4  —  Comparing laps")
     analysis = run_analysis(ref_json, comp_json)
@@ -79,7 +86,7 @@ def run():
 
     # ── Dashboard ─────────────────────────────────────────────────────────────
     banner("Building dashboard")
-    html = build_dashboard(analysis, coaching, ref_json, comp_json, race_result)
+    html = build_dashboard(analysis, coaching, ref_json, comp_json, race_result, extra_channels)
     dashboard_path = f"{OUTPUT_DIR}/dashboard.html"
     with open(dashboard_path, "w") as f:
         f.write(html)

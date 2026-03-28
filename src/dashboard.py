@@ -68,7 +68,7 @@ def fmt_time(s):
     return f"{mins}:{secs:06.3f}" if mins > 0 else f"{secs:.3f}s"
 
 
-def build_dashboard(analysis, coaching, ref_json, comp_json, race_result=None):
+def build_dashboard(analysis, coaching, ref_json, comp_json, race_result=None, extra_channels=None):
     ref_time  = analysis["ref_lap_time_s"]
     comp_time = analysis["comp_lap_time_s"]
     delta     = analysis["total_time_delta_s"]
@@ -111,6 +111,28 @@ def build_dashboard(analysis, coaching, ref_json, comp_json, race_result=None):
         const leftBnd    = {json.dumps(map_data['left_bnd'])};
         const rightBnd   = {json.dumps(map_data['right_bnd'])};
         """
+
+    # Extra channel JS data
+    extra_js = ""
+    if extra_channels:
+        if "brake_temp" in extra_channels:
+            bt = extra_channels["brake_temp"]
+            extra_js += f"""
+        hasBrakeTemp = true;
+        const btTime = {json.dumps(bt['time_s'])};
+        const btFL   = {json.dumps(bt['fl'])};
+        const btFR   = {json.dumps(bt['fr'])};
+        const btRL   = {json.dumps(bt['rl'])};
+        const btRR   = {json.dumps(bt['rr'])};"""
+        if "tyre_temp" in extra_channels:
+            tt = extra_channels["tyre_temp"]
+            extra_js += f"""
+        hasTyreTemp = true;
+        const ttTime = {json.dumps(tt['time_s'])};
+        const ttFL   = {json.dumps(tt['fl'])};
+        const ttFR   = {json.dumps(tt['fr'])};
+        const ttRL   = {json.dumps(tt['rl'])};
+        const ttRR   = {json.dumps(tt['rr'])};"""
 
     def sector_cards():
         html = ""
@@ -261,6 +283,93 @@ def build_dashboard(analysis, coaching, ref_json, comp_json, race_result=None):
         <div class="sec">Race Events</div>
         {event_html}"""
 
+    def extra_section():
+        if not extra_channels:
+            return ""
+        sections = []
+
+        if "brake_temp" in extra_channels:
+            bt = extra_channels["brake_temp"]
+            # Peak temps
+            pk_fl = max(bt["fl"]) if bt["fl"] else 0
+            pk_fr = max(bt["fr"]) if bt["fr"] else 0
+            pk_rl = max(bt["rl"]) if bt["rl"] else 0
+            pk_rr = max(bt["rr"]) if bt["rr"] else 0
+
+            def temp_color(t):
+                if t > 600: return "#E8002D"
+                if t > 400: return "#FF9800"
+                if t > 200: return "#FFD700"
+                return "#00D2BE"
+
+            sections.append(f"""
+        <div class="extra-chart-wrap">
+          <div class="sec">Brake Disc Temperatures (Reference Lap)</div>
+          <div class="extra-chart-container"><canvas id="brakeChart"></canvas></div>
+          <div class="wheel-grid" style="margin-top:12px">
+            <div class="wheel-cell">
+              <div class="wheel-label">FL Peak</div>
+              <div class="wheel-val" style="color:{temp_color(pk_fl)}">{pk_fl:.0f}°C</div>
+            </div>
+            <div class="wheel-cell">
+              <div class="wheel-label">FR Peak</div>
+              <div class="wheel-val" style="color:{temp_color(pk_fr)}">{pk_fr:.0f}°C</div>
+            </div>
+            <div class="wheel-cell">
+              <div class="wheel-label">RL Peak</div>
+              <div class="wheel-val" style="color:{temp_color(pk_rl)}">{pk_rl:.0f}°C</div>
+            </div>
+            <div class="wheel-cell">
+              <div class="wheel-label">RR Peak</div>
+              <div class="wheel-val" style="color:{temp_color(pk_rr)}">{pk_rr:.0f}°C</div>
+            </div>
+          </div>
+        </div>""")
+
+        if "tyre_temp" in extra_channels:
+            tt = extra_channels["tyre_temp"]
+            avg_fl = sum(v for v in tt["fl"] if v > 0) / max(1, sum(1 for v in tt["fl"] if v > 0))
+            avg_fr = sum(v for v in tt["fr"] if v > 0) / max(1, sum(1 for v in tt["fr"] if v > 0))
+            avg_rl = sum(v for v in tt["rl"] if v > 0) / max(1, sum(1 for v in tt["rl"] if v > 0))
+            avg_rr = sum(v for v in tt["rr"] if v > 0) / max(1, sum(1 for v in tt["rr"] if v > 0))
+
+            def tyre_color(t):
+                if 80 <= t <= 110: return "#00D2BE"
+                if t > 110: return "#E8002D"
+                return "#FFD700"
+
+            sections.append(f"""
+        <div class="extra-chart-wrap">
+          <div class="sec">Tyre Temperatures (Reference Lap)</div>
+          <div class="extra-chart-container"><canvas id="tyreChart"></canvas></div>
+          <div class="wheel-grid" style="margin-top:12px">
+            <div class="wheel-cell">
+              <div class="wheel-label">FL Avg</div>
+              <div class="wheel-val" style="color:{tyre_color(avg_fl)}">{avg_fl:.0f}°C</div>
+            </div>
+            <div class="wheel-cell">
+              <div class="wheel-label">FR Avg</div>
+              <div class="wheel-val" style="color:{tyre_color(avg_fr)}">{avg_fr:.0f}°C</div>
+            </div>
+            <div class="wheel-cell">
+              <div class="wheel-label">RL Avg</div>
+              <div class="wheel-val" style="color:{tyre_color(avg_rl)}">{avg_rl:.0f}°C</div>
+            </div>
+            <div class="wheel-cell">
+              <div class="wheel-label">RR Avg</div>
+              <div class="wheel-val" style="color:{tyre_color(avg_rr)}">{avg_rr:.0f}°C</div>
+            </div>
+          </div>
+        </div>""")
+
+        if not sections:
+            return ""
+
+        inner = "".join(sections)
+        cols = "grid-template-columns:1fr 1fr" if len(sections) == 2 else "grid-template-columns:1fr"
+        return f'''<div class="sec">Vehicle Telemetry — Reference Car</div>
+        <div class="extra-grid" style="{cols}">{inner}</div>'''
+
     whats_working_label = "What's Working"
     positives_section = (
         '<div class="sec">' + whats_working_label + '</div>'
@@ -400,6 +509,15 @@ body::before{{content:'';position:fixed;inset:0;background-image:repeating-linea
 .event-speed{{font-size:12px;font-weight:700;color:var(--red)}}
 .event-desc{{font-size:12px;color:#aaa;line-height:1.5}}
 
+/* extra channels */
+.extra-grid{{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:28px}}
+.extra-chart-wrap{{background:var(--bg2);border:1px solid var(--border);padding:20px}}
+.extra-chart-container{{position:relative;height:200px}}
+.wheel-grid{{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}}
+.wheel-cell{{background:var(--bg3);border:1px solid var(--border);padding:10px;text-align:center}}
+.wheel-label{{font-size:9px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px}}
+.wheel-val{{font-family:var(--fd);font-size:22px;font-weight:700}}
+
 /* animations */
 @keyframes fadeUp{{from{{opacity:0;transform:translateY(16px)}}to{{opacity:1;transform:translateY(0)}}}}
 @keyframes slideIn{{from{{opacity:0;transform:translateX(-12px)}}to{{opacity:1;transform:translateX(0)}}}}
@@ -496,6 +614,8 @@ body::before{{content:'';position:fixed;inset:0;background-image:repeating-linea
 
 {positives_section}
 
+{extra_section()}
+
 {race_section()}
 
 </div>
@@ -541,6 +661,8 @@ function switchChart(mode,btn){{
 }}
 window.addEventListener('load',()=>{{
   buildChart('speed');
+  buildBrakeChart();
+  buildTyreChart();
   setTimeout(()=>document.querySelectorAll('.delta-bar').forEach(b=>{{const w=b.style.width;b.style.width='0';setTimeout(()=>b.style.width=w,50)}}),400);
   drawTrackMap();
 }});
@@ -695,6 +817,63 @@ function drawTrackMap(){{
   ctx.fillStyle = '#FFD700';
   ctx.textAlign = 'center';
   ctx.fillText('S/F', fx, fy - 12);
+}}
+
+window.addEventListener('resize', drawTrackMap);
+
+// ── EXTRA CHANNEL CHARTS ──────────────────────────────────────────────────────
+let hasBrakeTemp = false;
+let hasTyreTemp  = false;
+{extra_js}
+
+function buildBrakeChart(){{
+  const ctx = document.getElementById('brakeChart');
+  if(!ctx || !hasBrakeTemp) return;
+  new Chart(ctx, {{
+    type: 'line',
+    data: {{
+      labels: btTime,
+      datasets: [
+        {{label:'FL',data:btFL,borderColor:'#E8002D',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false}},
+        {{label:'FR',data:btFR,borderColor:'#FF9800',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false}},
+        {{label:'RL',data:btRL,borderColor:'#FFD700',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false}},
+        {{label:'RR',data:btRR,borderColor:'#00D2BE',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false}},
+      ]
+    }},
+    options:{{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{{legend:{{labels:{{color:'#555',font:{{family:'JetBrains Mono',size:10}}}}}},tooltip:{{backgroundColor:'#0d0d0d',borderColor:'#222',borderWidth:1}}}},
+      scales:{{
+        x:{{type:'linear',title:{{display:true,text:'Time (s)',color:'#333',font:{{family:'JetBrains Mono',size:10}}}},ticks:{{color:'#333',font:{{family:'JetBrains Mono',size:10}},maxTicksLimit:6}},grid:{{color:'#111'}}}},
+        y:{{title:{{display:true,text:'Temperature (°C)',color:'#333',font:{{family:'JetBrains Mono',size:10}}}},ticks:{{color:'#333',font:{{family:'JetBrains Mono',size:10}}}},grid:{{color:'#111'}}}}
+      }}
+    }}
+  }});
+}}
+
+function buildTyreChart(){{
+  const ctx = document.getElementById('tyreChart');
+  if(!ctx || !hasTyreTemp) return;
+  new Chart(ctx, {{
+    type: 'line',
+    data: {{
+      labels: ttTime,
+      datasets: [
+        {{label:'FL',data:ttFL,borderColor:'#E8002D',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false}},
+        {{label:'FR',data:ttFR,borderColor:'#FF9800',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false}},
+        {{label:'RL',data:ttRL,borderColor:'#FFD700',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false}},
+        {{label:'RR',data:ttRR,borderColor:'#00D2BE',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false}},
+      ]
+    }},
+    options:{{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{{legend:{{labels:{{color:'#555',font:{{family:'JetBrains Mono',size:10}}}}}},tooltip:{{backgroundColor:'#0d0d0d',borderColor:'#222',borderWidth:1}}}},
+      scales:{{
+        x:{{type:'linear',title:{{display:true,text:'Time (s)',color:'#333',font:{{family:'JetBrains Mono',size:10}}}},ticks:{{color:'#333',font:{{family:'JetBrains Mono',size:10}},maxTicksLimit:6}},grid:{{color:'#111'}}}},
+        y:{{title:{{display:true,text:'Temperature (°C)',color:'#333',font:{{family:'JetBrains Mono',size:10}}}},ticks:{{color:'#333',font:{{family:'JetBrains Mono',size:10}}}},grid:{{color:'#111'}}}}
+      }}
+    }}
+  }});
 }}
 
 window.addEventListener('resize', drawTrackMap);
