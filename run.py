@@ -18,11 +18,10 @@ from coach         import generate_coaching_report, print_coaching_report
 from race_analyzer import run_race_analysis
 
 # ── CONFIG — change these if your filenames differ ───────────────────────────
-BASE_DIR   = Path(__file__).parent
-REF_MCAP   = str(BASE_DIR.parent / "data/hackathon_fast_laps.mcap")
-COMP_MCAP  = str(BASE_DIR.parent / "data/hackathon_good_lap.mcap")
-OUTPUT_DIR = str(BASE_DIR / "output")
-RACE_MCAP  = str(BASE_DIR.parent / "data/hackathon_wheel_to_wheel.mcap")
+REF_MCAP   = "data/hackathon_fast_laps.mcap"
+COMP_MCAP  = "data/hackathon_good_lap.mcap"
+OUTPUT_DIR = "output"
+RACE_MCAP  = "data/hackathon_wheel_to_wheel.mcap"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -119,10 +118,25 @@ def build_track_map_data(fast_trace, good_trace, analysis):
     good_d = good_trace["dist"]
     good_s_interp = list(np.interp(fast_d, good_d, good_trace["speed"]))
     delta = [g - f for f, g in zip(fast_trace["speed"], good_s_interp)]
+
+    # Load track boundaries
+    left_bnd, right_bnd = [], []
+    bnd_path = Path(__file__).parent.parent / "data/yas_marina_bnd.json"
+    try:
+        import json as _json
+        bnd = _json.load(open(bnd_path))["boundaries"]
+        step = 6  # downsample from ~6000 to ~1000 points
+        left_bnd  = bnd["left_border"][::step]
+        right_bnd = bnd["right_border"][::step]
+    except Exception as e:
+        print(f"  Note: track boundaries not loaded ({e})")
+
     return {
-        "x":     fast_trace["x"],
-        "y":     fast_trace["y"],
-        "delta": delta,
+        "x":         fast_trace["x"],
+        "y":         fast_trace["y"],
+        "delta":     delta,
+        "left_bnd":  left_bnd,
+        "right_bnd": right_bnd,
         "corners": [
             {"name": c["corner_name"], "dist": c["dist_m"], "delta": c["apex_speed_delta_kmh"]}
             for c in analysis.get("corners", [])
@@ -177,6 +191,8 @@ def build_dashboard(analysis, coaching, ref_json, comp_json, race_result=None):
         const trackY     = {json.dumps(map_data['y'])};
         const trackDelta = {json.dumps(map_data['delta'])};
         const corners    = {json.dumps(map_data['corners'])};
+        const leftBnd    = {json.dumps(map_data['left_bnd'])};
+        const rightBnd   = {json.dumps(map_data['right_bnd'])};
         """
 
     def sector_cards():
@@ -635,11 +651,15 @@ function drawTrackMap(){{
   ctx.clearRect(0,0,W,H);
 
   const xs = trackX, ys = trackY;
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const minY = Math.min(...ys), maxY = Math.max(...ys);
+
+  // Compute bounds from all sources: racing line + both boundaries
+  const allX = [...xs, ...leftBnd.map(p=>p[0]), ...rightBnd.map(p=>p[0])];
+  const allY = [...ys, ...leftBnd.map(p=>p[1]), ...rightBnd.map(p=>p[1])];
+  const minX = Math.min(...allX), maxX = Math.max(...allX);
+  const minY = Math.min(...allY), maxY = Math.max(...allY);
   const rangeX = maxX - minX, rangeY = maxY - minY;
 
-  const pad = 60;
+  const pad = 48;
   const scaleX = (W - pad*2) / rangeX;
   const scaleY = (H - pad*2) / rangeY;
   const scale  = Math.min(scaleX, scaleY);
@@ -650,19 +670,52 @@ function drawTrackMap(){{
     return [x * scale + offX, H - (y * scale + offY)];
   }}
 
-  // Draw thick shadow/glow for track base
-  ctx.lineWidth = 14;
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  const [sx0, sy0] = toCanvas(xs[0], ys[0]);
-  ctx.moveTo(sx0, sy0);
-  for(let i=1;i<xs.length;i++){{ const [cx,cy]=toCanvas(xs[i],ys[i]); ctx.lineTo(cx,cy); }}
-  ctx.stroke();
+  // Draw track fill between boundaries
+  if(leftBnd.length > 0 && rightBnd.length > 0){{
+    ctx.beginPath();
+    const [lx0,ly0] = toCanvas(leftBnd[0][0], leftBnd[0][1]);
+    ctx.moveTo(lx0, ly0);
+    for(let i=1;i<leftBnd.length;i++){{
+      const [lx,ly] = toCanvas(leftBnd[i][0], leftBnd[i][1]);
+      ctx.lineTo(lx, ly);
+    }}
+    for(let i=rightBnd.length-1;i>=0;i--){{
+      const [rx,ry] = toCanvas(rightBnd[i][0], rightBnd[i][1]);
+      ctx.lineTo(rx, ry);
+    }}
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    ctx.fill();
 
-  // Draw delta-colored segments
-  ctx.lineWidth = 5;
+    // Left boundary line
+    ctx.beginPath();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const [lbx0,lby0] = toCanvas(leftBnd[0][0], leftBnd[0][1]);
+    ctx.moveTo(lbx0, lby0);
+    for(let i=1;i<leftBnd.length;i++){{
+      const [lx,ly] = toCanvas(leftBnd[i][0], leftBnd[i][1]);
+      ctx.lineTo(lx, ly);
+    }}
+    ctx.stroke();
+
+    // Right boundary line
+    ctx.beginPath();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    const [rbx0,rby0] = toCanvas(rightBnd[0][0], rightBnd[0][1]);
+    ctx.moveTo(rbx0, rby0);
+    for(let i=1;i<rightBnd.length;i++){{
+      const [rx,ry] = toCanvas(rightBnd[i][0], rightBnd[i][1]);
+      ctx.lineTo(rx, ry);
+    }}
+    ctx.stroke();
+  }}
+
+  // Draw delta-colored racing line on top
+  ctx.lineWidth = 3;
   ctx.lineCap = 'round';
   for(let i=1;i<xs.length;i++){{
     const [x1,y1] = toCanvas(xs[i-1],ys[i-1]);

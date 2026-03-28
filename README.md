@@ -1,108 +1,150 @@
-# AI Race Coaching Engine
-Constructor GenAI Hackathon 2026 — Autonomous Track
+# AI Race Engineer
+**Constructor GenAI Hackathon 2026 — Autonomous Track**
 
-Analyzes real autonomous racing telemetry from Yas Marina Circuit and generates
-corner-by-corner coaching feedback using the Claude API.
+An end-to-end race engineering system that ingests real autonomous racing telemetry from Yas Marina Circuit, compares laps against a reference, detects race events, and generates corner-by-corner coaching feedback — all visualised in an F1-style dashboard.
+
+No AI API key required. Runs fully offline.
+
+---
+
+## Project Structure
+
+```
+AI-Race-Engineer/
+├── run.py                  ← single entry point, press ▶ in VS Code
+├── requirements.txt
+├── src/
+│   ├── extractor.py        ← parses MCAP files → lap JSON
+│   ├── analyzer.py         ← aligns laps, computes sector/corner deltas
+│   ├── coach.py            ← rule-based coaching engine
+│   └── race_analyzer.py    ← wheel-to-wheel race event detection
+└── output/                 ← generated files land here
+    ├── fast_laps.json
+    ├── good_lap.json
+    ├── analysis.json
+    ├── coaching.json
+    ├── race_laps.json
+    ├── race_analysis.json
+    └── dashboard.html      ← opens automatically in browser
+```
+
+Data files live one level up in a shared `data/` folder:
+```
+data/
+├── hackathon_fast_laps.mcap
+├── hackathon_good_lap.mcap
+├── hackathon_wheel_to_wheel.mcap
+├── yas_marina_bnd.json
+└── sd_msgs/
+```
+
+---
 
 ## Setup
 
 ```bash
-# Clone / place your MCAP files in a data/ folder
-mkdir data
-cp hackathon_*.mcap data/
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Set your Anthropic API key
-export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-## Quick Start (full pipeline)
-
-```bash
-python main.py run data/hackathon_fast_laps.mcap data/hackathon_good_lap.mcap
-```
-
-This runs all four steps automatically and prints the coaching report.
+No API keys needed.
 
 ---
 
-## Step-by-Step
+## Running
 
-### Step 0: Inspect message schema (run this first if extraction fails)
-```bash
-python main.py inspect data/hackathon_fast_laps.mcap
-```
-This prints the actual field names in the StateEstimation message.
-If extraction fails, check these names match what's in `src/extractor.py`.
+Open `run.py` in VS Code and press **▶**. The full pipeline runs automatically:
 
-### Step 1: Extract telemetry from MCAP files
-```bash
-python main.py extract data/hackathon_fast_laps.mcap
-python main.py extract data/hackathon_good_lap.mcap
-```
-Outputs: `output/hackathon_fast_laps.json`, `output/hackathon_good_lap.json`
-
-### Step 2: Analyze — compare good lap vs fast lap
-```bash
-# fast_laps = reference, good_lap = driver being coached
-python main.py analyze output/hackathon_fast_laps.json output/hackathon_good_lap.json
-```
-Outputs: `output/analysis.json`
-
-For fast_laps which has two laps, specify which lap:
-```bash
-python main.py analyze output/hackathon_fast_laps.json output/hackathon_good_lap.json --ref-lap 1
-```
-
-### Step 3: Generate coaching report
-```bash
-python main.py coach output/analysis.json
-```
-Outputs: `output/analysis_coaching.json` + prints report to terminal
+1. Extracts telemetry from both MCAP files
+2. Aligns laps by distance and computes deltas
+3. Generates corner-by-corner coaching report
+4. Analyses wheel-to-wheel race file for events
+5. Builds dashboard and opens it in your browser
 
 ---
-
-## Output Files
-
-| File | Contents |
-|------|----------|
-| `output/*.json` | Extracted lap telemetry (time, distance, speed, inputs, wheel data) |
-| `output/analysis.json` | Sector/corner deltas between two laps |
-| `output/analysis_coaching.json` | AI coaching report with priority actions |
-
-## Troubleshooting
-
-**"No StateEstimation messages found"**
-→ Run `python main.py inspect <file.mcap>` to see what topics are in the file.
-→ The topic may be `/constructor0/state_estimation` or similar.
-
-**Lap split wrong (e.g., only 1 lap detected in fast_laps)**
-→ Edit `YAS_MARINA_LAP_M` in `src/extractor.py` — try 2640 (half the circuit) 
-→ Or the MCAP file has data for only one lap in each file.
-
-**Field values all zero**
-→ Run inspect mode to find the actual field names
-→ Edit `_safe_get()` calls in `src/extractor.py` to match real field names
 
 ## Architecture
 
 ```
-MCAP file → extractor.py → lap JSON
-                                ↓
-                          analyzer.py → analysis JSON
-                                            ↓
-                                      coach.py → Claude API → coaching report
+hackathon_fast_laps.mcap  ──┐
+                             ├──► extractor.py ──► lap JSON
+hackathon_good_lap.mcap   ──┘         │
+                                       ▼
+                                  analyzer.py ──► analysis JSON
+                                       │
+                                       ▼
+                                   coach.py ──► coaching JSON
+                                       │
+hackathon_wheel_to_wheel.mcap ──► race_analyzer.py ──► race JSON
+                                       │
+                                       ▼
+                                  dashboard.html
 ```
 
-## Adding Sim Data (tomorrow)
+### Key design decisions
 
-When your simulator is set up, you'll get a CSV from SimHub.
-Run the normalizer (coming in Phase 2):
+**Rule-based coaching, not LLM.** The coaching engine uses deterministic rules derived from motorsport technique — brake point delta, apex speed loss, throttle pick-up delay. This means it runs offline, produces consistent output, and the reasoning is fully explainable.
+
+**Distance-aligned comparison.** Laps are compared on a common distance grid (5m resolution), not by time. This correctly handles sections where one lap is faster — the comparison stays spatially meaningful.
+
+**Event detection for race scenarios.** The wheel-to-wheel analyzer looks for unplanned braking spikes and lift-off events that are out of character with normal corner profiles. These are signatures of the autonomous car reacting to other vehicles.
+
+---
+
+## Dashboard
+
+The generated `output/dashboard.html` includes:
+
+- **Hero lap time comparison** — reference vs driver with gap
+- **Sector breakdown** — time delta, min speed, throttle per sector
+- **Telemetry trace** — speed / throttle / brake overlaid by distance
+- **Track map** — GPS path color-coded by speed delta (red = slower, teal = faster)
+- **Priority actions** — ranked coaching cards with exact numbers and fixes
+- **Corner analysis** — per-corner breakdown of braking, apex speed, throttle pick-up
+- **Race analysis** — lap table, pace vs reference, detected race events
+
+---
+
+## Data
+
+Three MCAP files from real autonomous racing at Yas Marina Circuit (Abu Dhabi):
+
+| File | Duration | Description |
+|------|----------|-------------|
+| `hackathon_fast_laps.mcap` | 74.3s | Two fastest laps — used as reference |
+| `hackathon_good_lap.mcap` | 81.3s | Conservative lap — used as comparison |
+| `hackathon_wheel_to_wheel.mcap` | 226s | Multi-lap race scenario |
+
+Key telemetry channels used:
+
+| Channel | Field | Rate |
+|---------|-------|------|
+| Position | `x_m`, `y_m`, `z_m` | ~100 Hz |
+| Speed | `v_mps` | ~100 Hz |
+| Acceleration | `ax_mps2`, `ay_mps2` | ~100 Hz |
+| Inputs | `gas`, `brake`, `delta_wheel_rad` | ~100 Hz |
+| Wheel speeds | `omega_w_fl/fr/rl/rr` | ~100 Hz |
+| Slip | `lambda_fl/fr/rl/rr_perc`, `alpha_fl/fr/rl/rr_rad` | ~100 Hz |
+| Brake pressure | `cba_actual_pressure_fl/fr/rl/rr_pa` | ~100 Hz |
+
+---
+
+## Troubleshooting
+
+**FileNotFoundError on MCAP files**
+→ Paths are resolved relative to `run.py`. Ensure `data/` is one level above `AI-Race-Engineer/`.
+
+**"No StateEstimation messages found"**
+→ Verify the topic with:
 ```bash
-python normalize.py sim_lap.csv --output output/sim_lap.json
-python main.py analyze output/hackathon_fast_laps.json output/sim_lap.json
-python main.py coach output/analysis.json
+python3 -c "
+from mcap_ros2.reader import read_ros2_messages
+for item in read_ros2_messages('path/to/file.mcap'):
+    print(item.channel.topic); break
+"
 ```
-Same coaching engine, zero changes needed.
+
+**Dashboard shows no speed trace**
+→ Run the full pipeline via `run.py` — the trace requires both `fast_laps.json` and `good_lap.json` in `output/`.
+
+**Race analysis shows 0 events**
+→ Tune `EVENT_BRAKE_THRESH` and `EVENT_SPEED_DROP` in `src/race_analyzer.py`.

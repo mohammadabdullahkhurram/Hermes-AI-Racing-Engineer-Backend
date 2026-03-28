@@ -75,11 +75,14 @@ def extract_race_laps(mcap_path: str) -> list:
 
     # Split into laps by distance
     total_dist = records[-1]["dist_m"]
-    n_laps = max(1, round(total_dist / YAS_MARINA_LAP_M))
-    print(f"  Total distance: {total_dist:.0f}m → {n_laps} lap(s)")
+    total_time = records[-1]["ts"]
+    # Estimate laps from both distance and time (avg ~80s/lap at Yas Marina)
+    n_laps = max(max(1, round(total_dist / YAS_MARINA_LAP_M)),
+                 max(1, round(total_time / 80)))
+    print(f"  Total distance: {total_dist:.0f}m, time: {total_time:.0f}s → {n_laps} lap(s)")
 
     laps = []
-    lap_target = YAS_MARINA_LAP_M
+    lap_target = total_dist / n_laps
     current = []
     lap_start_dist = 0.0
 
