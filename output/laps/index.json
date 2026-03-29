@@ -94,5 +94,21 @@
     "gap_s": -7.58,
     "samples": 3205,
     "timestamp": "2026-03-28T23:53:00.274209"
+  },
+  {
+    "lap_id": 13,
+    "label": "ac_lap1",
+    "lap_time_s": 90.202,
+    "gap_s": 15.943,
+    "samples": 3962,
+    "timestamp": "2026-03-29T03:08:57.279615"
+  },
+  {
+    "lap_id": 14,
+    "label": "ac_lap1",
+    "lap_time_s": 131.293,
+    "gap_s": 57.034,
+    "samples": 3687,
+    "timestamp": "2026-03-29T07:49:22.005775"
   }
 ]

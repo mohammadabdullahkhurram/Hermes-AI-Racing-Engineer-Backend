@@ -10,10 +10,11 @@ Run on your Windows PC while Assetto Corsa is open.
 6. Data sends to Mac automatically, CSV saved to Desktop
 """
 
-import ctypes, mmap, csv, time, sys, os, io, json, threading
+import ctypes, mmap, csv, time, sys, os, io, json, threading, math
 from datetime import datetime
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from configparser import ConfigParser
 
 try:
     import requests
@@ -21,6 +22,15 @@ except ImportError:
     os.system("pip install requests -q")
     import requests
 
+
+TRACK_ROOT = Path(r"M:\SteamLibrary\steamapps\common\assettocorsa\content\tracks\acu_yasmarina\north")
+MAP_PNG = TRACK_ROOT / "map.png"
+MAP_INI = TRACK_ROOT / "data" / "map.ini"
+
+POLL_HZ = 20.0
+CAR_LENGTH_M = 5.0
+CAR_WIDTH_M = 1.9
+MAX_PATH_POINTS = 5000
 
 # ── Shared state (updated by recorder, read by web UI) ────────────────────────
 state = {
@@ -36,6 +46,16 @@ state = {
     "mac_ip":    "",
     "mac_port":  8080,
     "history":   [],          # list of {lap, time, samples}
+    "connected": False,
+    "car_x": None,
+    "car_z": None,
+    "path": [],
+    "pixel_x": None,
+    "pixel_y": None,
+    "heading_rad": 0.0,
+    "map": {},
+    "completed_laps": 0,
+    "current_time_ms": 0,
 }
 
 
@@ -83,8 +103,9 @@ body::before{content:'';position:fixed;inset:0;background-image:repeating-linear
 /* Track map */
 .map-card{background:var(--bg2);border:1px solid var(--border);padding:14px;height:100%}
 .map-header{font-size:9px;letter-spacing:3px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;display:flex;justify-content:space-between}
-.map-container{position:relative;width:100%;height:340px;background:#0a0a0a}
-.map-container canvas{display:block;width:100%!important;height:100%!important}
+.map-container{position:relative;width:fit-content;max-width:100%;margin:0 auto;background:#000;overflow:auto;border:1px solid var(--border)}
+#trackImage{display:block;max-width:100%;height:auto;background:#000}
+#trackOverlay{position:absolute;inset:0;pointer-events:none}
 .map-legend{display:flex;gap:14px;margin-top:8px;flex-wrap:wrap}
 .ml-item{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted)}
 .ml-dot{width:10px;height:3px;border-radius:1px}
@@ -192,7 +213,8 @@ body::before{content:'';position:fixed;inset:0;background-image:repeating-linear
           <span id="mapDist" style="color:var(--yellow);font-size:11px"></span>
         </div>
         <div class="map-container">
-          <canvas id="trackMap"></canvas>
+          <img id="trackImage" src="/map.png" alt="Track map">
+          <canvas id="trackOverlay"></canvas>
         </div>
         <div class="map-legend">
           <div class="ml-item"><div class="ml-dot" style="background:rgba(255,255,255,0.3)"></div>Track walls</div>
@@ -271,144 +293,99 @@ body::before{content:'';position:fixed;inset:0;background-image:repeating-linear
 const sampleHistory = [];
 let chartCtx = null;
 let mapCtx = null;
-let refMapData = null;
-let mapBounds = null;
-let pathHistory = [];
 let _lastCarX = null, _lastCarZ = null;
+const trackImg = document.getElementById('trackImage');
 
 window.addEventListener('load', () => {
-  const mc = document.getElementById('trackMap');
+  const mc = document.getElementById('trackOverlay');
   if (mc) { mapCtx = mc.getContext('2d'); }
-  loadRefMap();
   const sc = document.getElementById('samplesChart');
   if (sc) chartCtx = sc.getContext('2d');
+  if (trackImg) {
+    trackImg.addEventListener('load', () => drawMap());
+  }
+  drawMap();
 });
 
-// ── Reference map loading ─────────────────────────────────────────────────────
-async function loadRefMap() {
-  try {
-    const res = await fetch('/ref_map');
-    const d   = await res.json();
-    if (d.ok && d.x && d.x.length > 0) {
-      refMapData = d;
-      computeBounds();
-      drawMap(null);
-      document.getElementById('coachMsg').textContent = 'Reference loaded — drive!';
-    } else {
-      setTimeout(loadRefMap, 3000);
-    }
-  } catch(e) { setTimeout(loadRefMap, 3000); }
-}
-
-function computeBounds() {
-  if (!refMapData) return;
-  const lb = refMapData.left_bnd  || [];
-  const rb = refMapData.right_bnd || [];
-  const allX = [...refMapData.x, ...lb.map(p=>p[0]), ...rb.map(p=>p[0])];
-  const allY = [...refMapData.y, ...lb.map(p=>p[1]), ...rb.map(p=>p[1])];
-  mapBounds = {
-    minX: Math.min(...allX), maxX: Math.max(...allX),
-    minY: Math.min(...allY), maxY: Math.max(...allY),
-  };
-}
-
-function toC(x, y, W, H, pad) {
-  if (!mapBounds) return [pad, pad];
-  const sx = (W - pad*2) / (mapBounds.maxX - mapBounds.minX);
-  const sy = (H - pad*2) / (mapBounds.maxY - mapBounds.minY);
-  return [(x - mapBounds.minX)*sx + pad, (y - mapBounds.minY)*sy + pad];
-}
-
-function drawMap(carPos) {
-  if (!mapCtx) return;
+function resizeMapCanvas() {
+  if (!mapCtx || !trackImg) return null;
   const c = mapCtx.canvas;
-  c.width  = c.parentElement ? c.parentElement.clientWidth  : 500;
-  c.height = c.parentElement ? c.parentElement.clientHeight : 340;
-  const W = c.width, H = c.height, pad = 16;
+  const rect = trackImg.getBoundingClientRect();
+  c.width = rect.width;
+  c.height = rect.height;
+  c.style.width = rect.width + 'px';
+  c.style.height = rect.height + 'px';
+  c.style.left = '0px';
+  c.style.top = '0px';
+  return { W: c.width, H: c.height };
+}
 
-  mapCtx.fillStyle = '#0a0a0a';
-  mapCtx.fillRect(0, 0, W, H);
+function drawMap() {
+  if (!mapCtx || !trackImg) return;
+  const dims = resizeMapCanvas();
+  if (!dims) return;
+  const { W, H } = dims;
+  mapCtx.clearRect(0, 0, W, H);
+}
+window.addEventListener('resize', drawMap);
 
-  if (!refMapData) {
-    mapCtx.fillStyle = '#2a2a2a';
-    mapCtx.font = '12px JetBrains Mono, monospace';
-    mapCtx.textAlign = 'center';
-    mapCtx.fillText('Loading track data...', W/2, H/2);
-    return;
-  }
+function drawLiveOverlay(data) {
+  if (!mapCtx || !trackImg) return;
+  const dims = resizeMapCanvas();
+  if (!dims) return;
+  const { W, H } = dims;
 
-  const xs = refMapData.x, ys = refMapData.y;
-  const lb = refMapData.left_bnd  || [];
-  const rb = refMapData.right_bnd || [];
+  mapCtx.clearRect(0, 0, W, H);
 
-  // Track fill + walls
-  if (lb.length > 0 && rb.length > 0) {
-    // Fill
+  const baseW = (data.map && data.map.width) || trackImg.naturalWidth || 1266;
+  const baseH = (data.map && data.map.height) || trackImg.naturalHeight || 608;
+  const scaleFactor = (data.map && data.map.scale_factor) || 1;
+
+  const sx = W / baseW;
+  const sy = H / baseH;
+
+  const path = data.path || [];
+  if (path.length > 1) {
     mapCtx.beginPath();
-    mapCtx.moveTo(...toC(lb[0][0], lb[0][1], W, H, pad));
-    for (let i=1;i<lb.length;i++) mapCtx.lineTo(...toC(lb[i][0], lb[i][1], W, H, pad));
-    for (let i=rb.length-1;i>=0;i--) mapCtx.lineTo(...toC(rb[i][0], rb[i][1], W, H, pad));
-    mapCtx.closePath();
-    mapCtx.fillStyle = 'rgba(255,255,255,0.04)';
-    mapCtx.fill();
-    // Left wall
-    mapCtx.beginPath();
-    mapCtx.lineWidth=1.5; mapCtx.strokeStyle='rgba(255,255,255,0.25)';
-    mapCtx.lineCap='round'; mapCtx.lineJoin='round';
-    for (let i=0;i<lb.length;i++) {
-      const pt = toC(lb[i][0],lb[i][1],W,H,pad);
-      i===0 ? mapCtx.moveTo(...pt) : mapCtx.lineTo(...pt);
-    }
-    mapCtx.stroke();
-    // Right wall
-    mapCtx.beginPath();
-    mapCtx.lineWidth=1.5; mapCtx.strokeStyle='rgba(255,255,255,0.25)';
-    for (let i=0;i<rb.length;i++) {
-      const pt = toC(rb[i][0],rb[i][1],W,H,pad);
-      i===0 ? mapCtx.moveTo(...pt) : mapCtx.lineTo(...pt);
-    }
-    mapCtx.stroke();
-  } else {
-    // Fallback: thick centre line
-    mapCtx.beginPath();
-    mapCtx.lineWidth=10; mapCtx.strokeStyle='#1e1e1e';
-    mapCtx.lineCap='round'; mapCtx.lineJoin='round';
-    for (let i=0;i<xs.length;i++) {
-      const pt = toC(xs[i],ys[i],W,H,pad);
-      i===0 ? mapCtx.moveTo(...pt) : mapCtx.lineTo(...pt);
+    mapCtx.lineWidth = 3;
+    mapCtx.strokeStyle = '#E8002D';
+    mapCtx.lineCap = 'round';
+    mapCtx.lineJoin = 'round';
+    for (let i = 0; i < path.length; i++) {
+      const x = path[i][0] * sx;
+      const y = path[i][1] * sy;
+      if (i === 0) mapCtx.moveTo(x, y);
+      else mapCtx.lineTo(x, y);
     }
     mapCtx.stroke();
   }
 
-  // Driven path
-  if (pathHistory.length > 1) {
-    mapCtx.beginPath();
-    mapCtx.lineWidth=3; mapCtx.strokeStyle='#E8002D';
-    mapCtx.lineCap='round'; mapCtx.lineJoin='round';
-    for (let i=0;i<pathHistory.length;i++) {
-      const pt = toC(pathHistory[i][0],pathHistory[i][1],W,H,pad);
-      i===0 ? mapCtx.moveTo(...pt) : mapCtx.lineTo(...pt);
-    }
-    mapCtx.stroke();
-  }
+  if (data.pixel_x !== null && data.pixel_y !== null) {
+    const x = data.pixel_x * sx;
+    const y = data.pixel_y * sy;
+    const pxPerMeterX = sx / scaleFactor;
+    const pxPerMeterY = sy / scaleFactor;
+    const carLengthPx = 5.0 * pxPerMeterX;
+    const carWidthPx = 1.9 * pxPerMeterY;
 
-  // S/F dot
-  const sf = toC(xs[0],ys[0],W,H,pad);
-  mapCtx.beginPath(); mapCtx.arc(sf[0],sf[1],5,0,Math.PI*2);
-  mapCtx.fillStyle='#FFD700'; mapCtx.fill();
+    mapCtx.save();
+    mapCtx.translate(x, y);
+    mapCtx.rotate(data.heading_rad || 0);
 
-  // Car dot
-  if (carPos) {
-    const cp = toC(carPos[0],carPos[1],W,H,pad);
-    mapCtx.beginPath(); mapCtx.arc(cp[0],cp[1],12,0,Math.PI*2);
-    mapCtx.fillStyle='rgba(232,0,45,0.25)'; mapCtx.fill();
-    mapCtx.beginPath(); mapCtx.arc(cp[0],cp[1],7,0,Math.PI*2);
-    mapCtx.fillStyle='#fff'; mapCtx.fill();
-    mapCtx.beginPath(); mapCtx.arc(cp[0],cp[1],4,0,Math.PI*2);
-    mapCtx.fillStyle='#E8002D'; mapCtx.fill();
+    mapCtx.fillStyle = 'rgba(255,255,255,0.14)';
+    mapCtx.fillRect(-carLengthPx * 0.5, -carWidthPx * 0.5, carLengthPx, carWidthPx);
+
+    mapCtx.fillStyle = '#ffffff';
+    mapCtx.fillRect(-carLengthPx * 0.42, -carWidthPx * 0.42, carLengthPx * 0.84, carWidthPx * 0.84);
+
+    mapCtx.fillStyle = '#00D2BE';
+    mapCtx.fillRect(carLengthPx * 0.12, -carWidthPx * 0.25, carLengthPx * 0.22, carWidthPx * 0.50);
+
+    mapCtx.restore();
   }
 }
-window.addEventListener('resize', () => drawMap(_lastCarX !== null ? [_lastCarX, _lastCarZ] : null));
+
+window.addEventListener('resize', () => drawMap());
 
 // ── Coaching update ───────────────────────────────────────────────────────────
 function updateCoachingUI(c) {
@@ -498,9 +475,7 @@ async function poll() {
       wMsg.style.display = isFirst ? 'block' : 'none';
       rUI.style.display  = isFirst ? 'none'  : 'block';
       wHis.style.display = isFirst ? 'block' : 'none';
-      pathHistory.length = 0;
-      _lastCarX = null; _lastCarZ = null;
-      if (refMapData) drawMap(null);
+      drawMap();
       sampleHistory.length = 0;
     } else if (data.status === 'recording' || data.status === 'sending' || data.status === 'done') {
       stxt.textContent = data.status==='recording' ? '● RECORDING' :
@@ -523,17 +498,10 @@ async function poll() {
       // Coaching
       if (data.coaching) updateCoachingUI(data.coaching);
 
-      // Map — use reference GPS coordinates (projected via nearest-point matching)
-      // This correctly places the car on the track regardless of AC coordinate system
-      const c = data.coaching;
-      if (c && c.ref_gps_x !== null && c.ref_gps_y !== null) {
-        const gx = c.ref_gps_x, gy = c.ref_gps_y;
-        if (_lastCarX === null || Math.abs(gx-_lastCarX)>0.5 || Math.abs(gy-_lastCarZ)>0.5) {
-          pathHistory.push([gx, gy]);
-          if (pathHistory.length > 1500) pathHistory.shift();
-          _lastCarX = gx; _lastCarZ = gy;
-        }
-        drawMap([gx, gy]);
+      drawLiveOverlay(data);
+      if (data.pixel_x !== null && data.pixel_y !== null) {
+        document.getElementById('mapDist').textContent =
+          'PX ' + Math.round(data.pixel_x) + ', ' + Math.round(data.pixel_y);
       }
     }
 
@@ -875,6 +843,30 @@ def update_coaching(car_x, car_z, speed_kmh, throttle, brake):
     coaching_state["severity"] = sev
 
 
+def load_map_ini(path: Path):
+    if not path.exists():
+        raise FileNotFoundError(f"map.ini not found: {path}")
+
+    parser = ConfigParser()
+    parser.read(path, encoding="utf-8")
+    p = parser["PARAMETERS"]
+
+    return {
+        "width": float(p.get("WIDTH", "0")),
+        "height": float(p.get("HEIGHT", "0")),
+        "margin": float(p.get("MARGIN", "0")),
+        "scale_factor": float(p.get("SCALE_FACTOR", "1")),
+        "x_offset": float(p.get("X_OFFSET", "0")),
+        "z_offset": float(p.get("Z_OFFSET", "0")),
+    }
+
+
+def world_to_pixel(x: float, z: float, mp: dict):
+    px = (x + mp["x_offset"]) / mp["scale_factor"]
+    py = (z + mp["z_offset"]) / mp["scale_factor"]
+    return px, py
+
+
 def take_sample(p, g):
     return {
         "LapTimeCurrent":      g.iCurrentTime,
@@ -964,6 +956,9 @@ class UIHandler(BaseHTTPRequestHandler):
             }).encode()
             self._send(200, "application/json", payload)
 
+        elif self.path == "/map.png":
+            self._send(200, "image/png", MAP_PNG.read_bytes())
+
         elif self.path.startswith("/download/"):
             lap_n = self.path.split("/")[-1]
             try:
@@ -1018,12 +1013,20 @@ def main():
         print("ERROR: Must run on Windows where Assetto Corsa is installed.")
         sys.exit(1)
 
+    if not MAP_PNG.exists():
+        print(f"ERROR: Track map not found: {MAP_PNG}")
+        sys.exit(1)
+    if not MAP_INI.exists():
+        print(f"ERROR: Track map.ini not found: {MAP_INI}")
+        sys.exit(1)
+
     print()
     mac_ip = input("Mac IP address (e.g. 192.168.1.10): ").strip()
     port   = 8080
 
     state["mac_ip"]   = mac_ip
     state["mac_port"] = port
+    state["map"] = load_map_ini(MAP_INI)
 
     # Start live UI server
     UI_PORT = 9000
@@ -1087,6 +1090,10 @@ def main():
     print("Drive a lap — recording starts automatically at S/F line\n")
 
     lap_num = 0
+    last_path_x = None
+    last_path_z = None
+    last_heading = 0.0
+    min_world_step = 0.5
 
     while True:
         lap_num += 1
@@ -1094,6 +1101,13 @@ def main():
         state["lap_num"]  = lap_num
         state["samples"]  = 0
         state["lap_time"] = None
+        state["path"] = []
+        state["pixel_x"] = None
+        state["pixel_y"] = None
+        state["heading_rad"] = 0.0
+        last_path_x = None
+        last_path_z = None
+        last_heading = 0.0
 
         print(f"{'─'*55}")
         print(f"  LAP {lap_num} — Waiting for S/F line...")
@@ -1181,13 +1195,40 @@ def main():
                     state["brake"]    = round(p.brake, 3)
 
                     # Always update car position (every sample)
-                    state["car_x"] = round(g.carCoordinates[0], 2)
-                    state["car_z"] = round(g.carCoordinates[2], 2)
+                    cx = float(g.carCoordinates[0])
+                    cz = float(g.carCoordinates[2])
+                    state["connected"] = (g.status == 2)
+                    state["car_x"] = round(cx, 2)
+                    state["car_z"] = round(cz, 2)
+                    state["completed_laps"] = int(g.completedLaps)
+                    state["current_time_ms"] = int(g.iCurrentTime)
+
+                    px, py = world_to_pixel(cx, cz, state["map"])
+                    state["pixel_x"] = round(px, 2)
+                    state["pixel_y"] = round(py, 2)
+
+                    if last_path_x is not None:
+                        dx = cx - last_path_x
+                        dz = cz - last_path_z
+                        if abs(dx) + abs(dz) > 1e-6:
+                            last_heading = math.atan2(dz, dx)
+                    state["heading_rad"] = last_heading
+
+                    should_add = False
+                    if last_path_x is None:
+                        should_add = True
+                    elif abs(cx - last_path_x) > min_world_step or abs(cz - last_path_z) > min_world_step:
+                        should_add = True
+
+                    if should_add:
+                        state["path"].append([round(px, 2), round(py, 2)])
+                        if len(state["path"]) > MAX_PATH_POINTS:
+                            state["path"] = state["path"][-MAX_PATH_POINTS:]
+                        last_path_x = cx
+                        last_path_z = cz
 
                     # Real-time coaching (every 5 samples = 10Hz)
                     if len(records) % 5 == 0 and ref_data["loaded"]:
-                        cx = g.carCoordinates[0]
-                        cz = g.carCoordinates[2]
                         update_coaching(cx, cz, p.speedKmh, p.gas, p.brake)
                         state["coaching"] = coaching_state.copy()
 
