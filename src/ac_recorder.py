@@ -23,9 +23,8 @@ except ImportError:
     import requests
 
 
-TRACK_ROOT = Path(r"M:\SteamLibrary\steamapps\common\assettocorsa\content\tracks\acu_yasmarina\north")
-MAP_PNG = TRACK_ROOT / "map.png"
-MAP_INI = TRACK_ROOT / "data" / "map.ini"
+MAP_PNG = "src/map.jpeg"
+MAP_INI = "src/map.ini"
 
 POLL_HZ = 20.0
 CAR_LENGTH_M = 5.0
